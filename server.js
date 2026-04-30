@@ -3,6 +3,9 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 
+// NEW: Import the random dictionary package
+const randomWords = require('random-words');
+
 const app = express();
 app.use(cors());
 
@@ -14,28 +17,6 @@ const io = new Server(server, {
         methods: ["GET", "POST"]
     }
 });
-
-const WORDS = [
-    // Animals
-    'elephant', 'tiger', 'spider', 'snake', 'turtle', 
-    'dolphin', 'dinosaur', 'penguin', 'giraffe', 'monkey',
-    
-    // Food
-    'apple', 'banana', 'pizza', 'hamburger', 'ice cream',
-    'donut', 'cookie', 'watermelon', 'taco', 'cheese',
-    
-    // Objects & Things
-    'guitar', 'computer', 'clock', 'glasses', 'camera',
-    'telephone', 'book', 'pencil', 'scissors', 'umbrella',
-    
-    // Places & Nature
-    'mountain', 'volcano', 'house', 'castle', 'bridge',
-    'snowflake', 'snowman', 'rainbow', 'tree', 'flower',
-    
-    // Sci-Fi & Fantasy
-    'rocket', 'astronaut', 'alien', 'robot', 'dragon',
-    'unicorn', 'ghost', 'zombie', 'crown', 'sword'
-];
 
 // NEW: Keep track of active rooms and their specific game states
 const activeRooms = {}; 
@@ -95,12 +76,8 @@ io.on('connection', (socket) => {
     // --- GAME LOGIC (Now Room-Specific) ---
 
     socket.on('requestWords', () => {
-        const choices = [];
-        const wordsCopy = [...WORDS]; 
-        for (let i = 0; i < 3; i++) {
-            const randomIndex = Math.floor(Math.random() * wordsCopy.length);
-            choices.push(wordsCopy.splice(randomIndex, 1)[0]);
-        }
+        // UPDATED: Use the package to instantly generate 3 random words
+        const choices = randomWords(3); 
         socket.emit('wordChoices', choices);
     });
 
