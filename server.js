@@ -3,6 +3,9 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 
+// NEW: Load our bulletproof custom word list!
+const WORDS = require('./words');
+
 const app = express();
 app.use(cors());
 
@@ -62,18 +65,16 @@ io.on('connection', (socket) => {
         }
     });
 
-    // --- FIXED: ENDLESS DICTIONARY API ---
-    socket.on('requestWords', async () => {
-        try {
-            // We ask the internet for 3 random dictionary words instead of relying on a broken package
-            const response = await fetch('https://random-word-api.herokuapp.com/word?number=3');
-            const choices = await response.json();
-            socket.emit('wordChoices', choices);
-        } catch (error) {
-            // If the dictionary API ever goes down, use these backups so the game doesn't break
-            console.error("Dictionary API failed, using backups.");
-            socket.emit('wordChoices', ['computer', 'building', 'ocean']);
+    // --- GAME LOGIC ---
+    socket.on('requestWords', () => {
+        // Pick 3 random words from your local words.js file
+        const choices = [];
+        const wordsCopy = [...WORDS]; 
+        for (let i = 0; i < 3; i++) {
+            const randomIndex = Math.floor(Math.random() * wordsCopy.length);
+            choices.push(wordsCopy.splice(randomIndex, 1)[0]);
         }
+        socket.emit('wordChoices', choices);
     });
 
     socket.on('wordSelected', (word) => {
