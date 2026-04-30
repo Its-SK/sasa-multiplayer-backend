@@ -3,9 +3,6 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 
-// NEW: Import the random dictionary package
-const randomWords = require('random-words');
-
 const app = express();
 app.use(cors());
 
@@ -18,10 +15,8 @@ const io = new Server(server, {
     }
 });
 
-// NEW: Keep track of active rooms and their specific game states
 const activeRooms = {}; 
 
-// Helper function to generate a random 4-letter Room ID
 function generateRoomId() {
     let result = '';
     const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
@@ -35,31 +30,26 @@ io.on('connection', (socket) => {
     console.log('A user connected:', socket.id);
 
     // --- ROOM MANAGEMENT LOGIC ---
-
-    // 1. Create a Room
     socket.on('createRoom', (playerName, callback) => {
         const roomId = generateRoomId();
         
-        // Initialize room state
         activeRooms[roomId] = {
             currentWord: '',
             players: []
         };
 
         socket.join(roomId);
-        socket.roomId = roomId; // Remember which room this socket is in
-        socket.playerName = playerName; // Remember the player's name
+        socket.roomId = roomId; 
+        socket.playerName = playerName; 
         
         callback({ success: true, roomId: roomId });
         io.to(roomId).emit('gameStatus', `👋 ${playerName} created the room!`);
     });
 
-    // 2. Join a Room
     socket.on('joinRoom', (data, callback) => {
         const roomId = data.roomId.toUpperCase();
         const playerName = data.playerName;
 
-        // Check if the room exists
         if (activeRooms[roomId]) {
             socket.join(roomId);
             socket.roomId = roomId;
@@ -68,23 +58,27 @@ io.on('connection', (socket) => {
             callback({ success: true, roomId: roomId });
             io.to(roomId).emit('gameStatus', `👋 ${playerName} joined the room!`);
         } else {
-            // Room doesn't exist
             callback({ success: false, message: "Room not found! Check the ID." });
         }
     });
 
-    // --- GAME LOGIC (Now Room-Specific) ---
-
-    socket.on('requestWords', () => {
-        // UPDATED: Use the package to instantly generate 3 random words
-        const choices = randomWords(3); 
-        socket.emit('wordChoices', choices);
+    // --- FIXED: ENDLESS DICTIONARY API ---
+    socket.on('requestWords', async () => {
+        try {
+            // We ask the internet for 3 random dictionary words instead of relying on a broken package
+            const response = await fetch('https://random-word-api.herokuapp.com/word?number=3');
+            const choices = await response.json();
+            socket.emit('wordChoices', choices);
+        } catch (error) {
+            // If the dictionary API ever goes down, use these backups so the game doesn't break
+            console.error("Dictionary API failed, using backups.");
+            socket.emit('wordChoices', ['computer', 'building', 'ocean']);
+        }
     });
 
     socket.on('wordSelected', (word) => {
         if (!socket.roomId) return;
         activeRooms[socket.roomId].currentWord = word;
-        // Use io.to(roomId).emit to ONLY broadcast to this specific room
         io.to(socket.roomId).emit('gameStatus', `🎨 ${socket.playerName} is choosing a word... Start guessing!`);
     });
 
@@ -93,12 +87,10 @@ io.on('connection', (socket) => {
         
         const room = activeRooms[socket.roomId];
         
-        // Check for correct guess
         if (room && room.currentWord && msg.toLowerCase().trim() === room.currentWord.toLowerCase()) {
             io.to(socket.roomId).emit('gameStatus', `🎉 ${socket.playerName} guessed it! The word was "${room.currentWord}"! 🎉`);
-            room.currentWord = ''; // Reset word
+            room.currentWord = ''; 
         } else {
-            // Normal chat message - attach player name!
             io.to(socket.roomId).emit('chatMessage', `<strong>${socket.playerName}:</strong> ${msg}`);
         }
     });
