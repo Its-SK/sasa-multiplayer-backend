@@ -34,7 +34,7 @@ io.on('connection', (socket) => {
             maxRounds: data.rounds || 3,
             turnIndex: -1,
             gameState: 'LOBBY',
-            correctGuessers: [] // NEW: Track who already guessed
+            correctGuessers: [] // Track who already guessed
         };
         socket.join(roomId);
         socket.roomId = roomId; 
@@ -63,7 +63,14 @@ io.on('connection', (socket) => {
     socket.on('startGame', () => {
         const room = activeRooms[socket.roomId];
         if (!room || room.gameState !== 'LOBBY') return;
+        
+        // BUG FIX: Reset the entire game state so it can be replayed!
         room.gameState = 'PLAYING';
+        room.currentRound = 1;
+        room.turnIndex = -1;
+        room.players.forEach(p => p.score = 0); // Reset scores to 0
+        io.to(socket.roomId).emit('updateScores', room.players);
+
         io.to(socket.roomId).emit('gameStarted');
         advanceTurn(socket.roomId); 
     });
@@ -83,11 +90,16 @@ io.on('connection', (socket) => {
             room.currentRound++;
         }
 
+        // GAME OVER CHECK
         if (room.currentRound > room.maxRounds) {
             io.to(roomId).emit('gameStatus', `🏆 GAME OVER! Final Scores!`);
             room.gameState = 'LOBBY';
-            room.turnIndex = -1;
-            io.to(roomId).emit('gameOver');
+            
+            // Sort players by score to figure out who won
+            const sortedPlayers = [...room.players].sort((a, b) => b.score - a.score);
+            
+            // Send the sorted player list to the frontend to populate the popup
+            io.to(roomId).emit('gameOver', sortedPlayers); 
             return;
         }
 
