@@ -33,13 +33,15 @@ io.on('connection', (socket) => {
             currentRound: 1,
             maxRounds: data.rounds || 3,
             turnIndex: -1,
-            gameState: 'LOBBY'
+            gameState: 'LOBBY',
+            correctGuessers: [] // NEW: Track who already guessed
         };
         socket.join(roomId);
         socket.roomId = roomId; 
         socket.playerName = data.playerName; 
         callback({ success: true, roomId: roomId });
         io.to(roomId).emit('gameStatus', `👋 ${data.playerName} created the room!`);
+        io.to(roomId).emit('updateScores', activeRooms[roomId].players);
     });
 
     socket.on('joinRoom', (data, callback) => {
@@ -51,6 +53,7 @@ io.on('connection', (socket) => {
             socket.playerName = data.playerName;
             callback({ success: true, roomId: roomId });
             io.to(roomId).emit('gameStatus', `👋 ${data.playerName} joined the room!`);
+            io.to(roomId).emit('updateScores', activeRooms[roomId].players);
         } else {
             callback({ success: false, message: "Room not found!" });
         }
@@ -62,31 +65,32 @@ io.on('connection', (socket) => {
         if (!room || room.gameState !== 'LOBBY') return;
         room.gameState = 'PLAYING';
         io.to(socket.roomId).emit('gameStarted');
-        advanceTurn(socket.roomId); // Kick off the first turn!
+        advanceTurn(socket.roomId); 
     });
 
     function advanceTurn(roomId) {
         const room = activeRooms[roomId];
         if (!room) return;
-        if (room.timer) clearInterval(room.timer); // Stop old timer
+        if (room.timer) clearInterval(room.timer); 
+
+        // Reset the guessers list for the new turn
+        room.correctGuessers = []; 
+        io.to(roomId).emit('updateScores', room.players);
 
         room.turnIndex++;
-        // If everyone has drawn, move to the next round
         if (room.turnIndex >= room.players.length) {
             room.turnIndex = 0;
             room.currentRound++;
         }
 
-        // Check if the game is over
         if (room.currentRound > room.maxRounds) {
-            io.to(roomId).emit('gameStatus', `🏆 GAME OVER! Thanks for playing!`);
+            io.to(roomId).emit('gameStatus', `🏆 GAME OVER! Final Scores!`);
             room.gameState = 'LOBBY';
             room.turnIndex = -1;
             io.to(roomId).emit('gameOver');
             return;
         }
 
-        // Start the next player's turn
         const drawer = room.players[room.turnIndex];
         if (!drawer) return; 
         
@@ -96,7 +100,6 @@ io.on('connection', (socket) => {
         io.to(roomId).emit('newTurn', { drawerId: drawer.id });
         io.to(roomId).emit('gameStatus', `🔄 Round ${room.currentRound}: ${drawer.name} is choosing a word!`);
 
-        // Send 3 words ONLY to the drawer
         const choices = [];
         const wordsCopy = [...WORDS]; 
         for (let i = 0; i < 3; i++) {
@@ -113,7 +116,6 @@ io.on('connection', (socket) => {
         room.currentWord = word;
         io.to(socket.roomId).emit('gameStatus', `🎨 Word selected! Start guessing!`);
         
-        // Start the 120 Second Timer
         room.timeLeft = 120;
         io.to(socket.roomId).emit('timerUpdate', room.timeLeft);
 
@@ -124,7 +126,7 @@ io.on('connection', (socket) => {
             if (room.timeLeft <= 0) {
                 clearInterval(room.timer);
                 io.to(socket.roomId).emit('gameStatus', `⏰ Time's up! The word was "${room.currentWord}".`);
-                setTimeout(() => advanceTurn(socket.roomId), 4000); // Wait 4 seconds, then next turn
+                setTimeout(() => advanceTurn(socket.roomId), 4000); 
             }
         }, 1000);
     });
@@ -132,20 +134,46 @@ io.on('connection', (socket) => {
     socket.on('chatMessage', (msg) => {
         if (!socket.roomId) return;
         const room = activeRooms[socket.roomId];
+        if (!room) return;
         
-        // Correct Guess Check
-        if (room && room.currentWord && msg.toLowerCase().trim() === room.currentWord.toLowerCase()) {
-            if (socket.id === room.drawerId) return; // Drawer can't guess!
+        // --- UPDATED POINT SYSTEM & HIDDEN GUESS LOGIC ---
+        if (room.gameState === 'PLAYING' && room.currentWord && msg.toLowerCase().trim() === room.currentWord.toLowerCase()) {
+            
+            if (socket.id === room.drawerId) return; // Drawer cannot guess their own word
+            if (room.correctGuessers.includes(socket.id)) return; // Prevent spamming for infinite points
 
-            io.to(socket.roomId).emit('gameStatus', `🎉 ${socket.playerName} guessed it! The word was "${room.currentWord}"! 🎉`);
-            clearInterval(room.timer); // Stop the timer immediately
-            room.currentWord = ''; 
-            setTimeout(() => advanceTurn(socket.roomId), 4000); // Auto-forward to next turn after 4 secs
+            // Add player to the list of people who guessed it this round
+            room.correctGuessers.push(socket.id);
+
+            // Calculate points: Math.floor((Time Left / Total Time) * Max Points). Max is 50.
+            const points = Math.max(5, Math.floor((room.timeLeft / 120) * 50));
+            
+            // Give points to the Guesser
+            const player = room.players.find(p => p.id === socket.id);
+            if (player) player.score += points;
+
+            // Give 25 points to the Drawer
+            const drawer = room.players.find(p => p.id === room.drawerId);
+            if (drawer) drawer.score += 25; 
+
+            // Broadcast the hidden success message (DOES NOT show the word!)
+            io.to(socket.roomId).emit('gameStatus', `🎉 ${socket.playerName} guessed the word! (+${points} pts)`);
+            io.to(socket.roomId).emit('updateScores', room.players); // Update UI immediately
+
+            // Check if EVERYONE (except the drawer) has guessed it
+            if (room.correctGuessers.length >= room.players.length - 1) {
+                clearInterval(room.timer);
+                io.to(socket.roomId).emit('gameStatus', `✨ Everyone guessed it! The word was "${room.currentWord}".`);
+                setTimeout(() => advanceTurn(socket.roomId), 4000); // Skip the rest of the timer!
+            }
+
         } else {
+            // It wasn't the right word, broadcast it like normal chat
             io.to(socket.roomId).emit('chatMessage', `<strong>${socket.playerName}:</strong> ${msg}`);
         }
     });
 
+    // --- DRAWING LOGIC ---
     socket.on('drawing', (data) => {
         if (!socket.roomId) return;
         socket.broadcast.to(socket.roomId).emit('drawing', data);
@@ -161,7 +189,8 @@ io.on('connection', (socket) => {
         if (room) {
             room.players = room.players.filter(p => p.id !== socket.id);
             io.to(socket.roomId).emit('gameStatus', `🚪 ${socket.playerName || 'Someone'} left the game.`);
-            // If the drawer quits mid-turn, skip to the next turn so the game doesn't freeze
+            io.to(socket.roomId).emit('updateScores', room.players);
+
             if (room.drawerId === socket.id && room.gameState === 'PLAYING') {
                 clearInterval(room.timer);
                 advanceTurn(socket.roomId);
